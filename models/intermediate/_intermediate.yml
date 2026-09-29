@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: int_product_events
-    description: "One row per event. Same 12,000 rows as stg_product_events. Missing organization_id filled from the user. Two flags added: is_valid_event_name and is_within_data_period. Nothing is deleted yet."
+    description: "One row per event. Same 12,000 rows as stg_product_events, nothing deleted. Missing organization_id filled from the user. Flags added: is_valid_event_name, is_within_data_period, is_repeat_of_one_time_event. user_event_occurrence counts how many times this user did this event (1 = first time)."
     columns:
       - name: event_id
         data_tests: [unique, not_null]
@@ -14,3 +14,8 @@ models:
               arguments:
                 to: ref('stg_organizations')
                 field: organization_id
+      - name: user_event_occurrence
+        data_tests: [not_null]
+      - name: is_repeat_of_one_time_event
+        description: "True for the 2nd, 3rd... time a user does signup, first_pipeline or start_trial. Assumption: the earliest occurrence is the real one."
+        data_tests: [not_null]
