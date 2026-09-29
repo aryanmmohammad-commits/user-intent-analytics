@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: source
+    description: Business and user context tables (synthetic).
+    tables:
+      - name: users
+      - name: organizations
+      - name: product_events
+
+  - name: circleci_raw
+    description: CircleCI-shaped pipeline data (synthetic).
+    tables:
+      - name: projects
+      - name: pipelines
+      - name: workflows
+      - name: jobs

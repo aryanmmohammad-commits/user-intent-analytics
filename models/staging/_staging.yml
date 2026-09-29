@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: stg_product_events
+    description: Product events with types fixed and duplicate event_ids removed.
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests: [not_null]
