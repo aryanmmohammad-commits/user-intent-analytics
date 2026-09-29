@@ -1,0 +1,76 @@
+version: 2
+
+models:
+
+  - name: user_intent_events
+    description: "One row per usable product event: valid event name, dated inside the data period (up to 31 Aug 2026), and not a repeat of a one-time event. project_id and plan_type are left out on purpose because they are not reliable. This is a clean list of behaviors, not a score of commercial intent."
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: event_name
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['signup', 'visit_pricing', 'view_docs', 'connect_repository', 'create_project', 'first_pipeline', 'run_workflow', 'run_test', 'successful_pipeline', 'failed_pipeline', 'invite_member', 'use_parallelism', 'start_trial']
+      - name: event_timestamp
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                max_value: "timestamptz '2026-09-01 00:00:00+00'"
+                inclusive: false
+
+  - name: dim_users
+    description: "One row per user, with the organization's current plan. created_at is the recorded creation time, but about half of the events are dated before it, so do not use it as the signup date."
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_organizations')
+                field: organization_id
+
+  - name: dim_organizations
+    description: "One row per organization. plan_type is the current plan only, not a history."
+    columns:
+      - name: organization_id
+        data_tests: [unique, not_null]
+      - name: plan_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['free', 'performance', 'scale', 'enterprise']
+
+  - name: fct_user_behavior
+    description: "One row per user (all users, including any with no usable events). Counts of each behavior, built only from user_intent_events. Counts describe what happened. They are not intent scores."
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: total_events
+        data_tests: [not_null]
+
+  - name: fct_org_behavior
+    description: "One row per organization (all organizations, including any with no users or events). Counts of each behavior, built only from user_intent_events. Counts describe what happened. They are not intent scores."
+    columns:
+      - name: organization_id
+        data_tests: [unique, not_null]
+      - name: total_users
+        data_tests: [not_null]
