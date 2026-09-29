@@ -1,42 +1,264 @@
 version: 2
 
 models:
+
+  - name: stg_users
+    description: "One row per user. Typed copy of the raw users table."
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: created_at
+        data_tests: [not_null]
+      - name: country
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['AM', 'AU', 'BR', 'CA', 'DE', 'FR', 'GB', 'IN', 'IR', 'NL', 'SE', 'US']
+      - name: device_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['mobile', 'laptop', 'desktop']
+      - name: source
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['referral', 'google', 'direct', 'github', 'docs', 'organic']
+
+  - name: stg_organizations
+    description: "One row per organization. Typed copy of the raw organizations table."
+    columns:
+      - name: organization_id
+        data_tests: [unique, not_null]
+      - name: plan_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['free', 'performance', 'scale', 'enterprise']
+      - name: country
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['AM', 'AU', 'BR', 'CA', 'DE', 'FR', 'GB', 'IN', 'IR', 'NL', 'SE', 'US']
+      - name: created_at
+        data_tests: [not_null]
+
+  - name: stg_projects
+    description: "One row per project. Typed copy of the raw projects table."
+    columns:
+      - name: project_id
+        data_tests: [unique, not_null]
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: repo_provider
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['github', 'bitbucket', 'gitlab']
+      - name: default_branch
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['main', 'master', 'develop']
+
+  - name: stg_pipelines
+    description: "One row per pipeline. 12 exact duplicate rows removed (raw had 3,012, this has 3,000)."
+    columns:
+      - name: pipeline_id
+        data_tests: [unique, not_null]
+      - name: project_id
+        description: "20 pipelines point to a project that does not exist (project_missing_999). Kept, flagged by the warn test."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_projects')
+                field: project_id
+              config:
+                severity: warn
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: created_at
+        data_tests: [not_null]
+      - name: status
+        description: "12 pipelines have status unknown_status. Kept, flagged by the warn test."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['success', 'failed', 'canceled', 'on_hold']
+              config:
+                severity: warn
+      - name: trigger_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['webhook', 'scheduled', 'manual', 'api', 'push']
+      - name: branch
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['main', 'feature/api', 'release', 'develop', 'feature/auth']
+
+  - name: stg_workflows
+    description: "One row per workflow run. Typed copy of the raw workflows table."
+    columns:
+      - name: workflow_id
+        data_tests: [unique, not_null]
+      - name: pipeline_id
+        description: "18 workflows point to a pipeline that does not exist. Kept, flagged by the warn test."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_pipelines')
+                field: pipeline_id
+              config:
+                severity: warn
+      - name: project_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_projects')
+                field: project_id
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: workflow_name
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['lint', 'test', 'integration-tests', 'deploy', 'build-and-test']
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['success', 'failed', 'canceled', 'running']
+      - name: duration_seconds
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: stg_jobs
+    description: "One row per job. duration_seconds is recomputed from stopped_at minus started_at. The value recorded in the raw data is kept as duration_seconds_recorded (10 of those were negative)."
+    columns:
+      - name: job_id
+        data_tests: [unique, not_null]
+      - name: workflow_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_workflows')
+                field: workflow_id
+      - name: project_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_projects')
+                field: project_id
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
+      - name: job_name
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['lint', 'install-dependencies', 'security-scan', 'unit-tests', 'checkout', 'integration-tests', 'deploy', 'build']
+      - name: status
+        description: "All 388 jobs with status running also have a stopped_at time, so status is not fully consistent with the timestamps."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['success', 'failed', 'canceled', 'running']
+      - name: started_at
+        data_tests: [not_null]
+      - name: duration_seconds
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
   - name: stg_product_events
-    description: Product events with types fixed and duplicate event_ids removed.
+    description: "One row per event. Exact duplicate event_ids removed (raw had 12,035 rows, this has 12,000). Nothing is filtered or fixed here except duplicates."
     columns:
       - name: event_id
         data_tests: [unique, not_null]
       - name: user_id
-        data_tests: [not_null]
-
-  - name: stg_users
-    columns:
-      - name: user_id
-        data_tests: [unique, not_null]
-
-  - name: stg_organizations
-    columns:
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
       - name: organization_id
-        data_tests: [unique, not_null]
-
-  - name: stg_projects
-    columns:
+        description: "80 events have no organization. Filled from the user's organization in the intermediate layer."
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
       - name: project_id
-        data_tests: [unique, not_null]
-
-  - name: stg_pipelines
-    description: Pipelines with types fixed and exact duplicate rows removed.
-    columns:
-      - name: pipeline_id
-        data_tests: [unique, not_null]
-
-  - name: stg_workflows
-    columns:
-      - name: workflow_id
-        data_tests: [unique, not_null]
-
-  - name: stg_jobs
-    description: Jobs with types fixed; duration recomputed from start and stop times.
-    columns:
-      - name: job_id
-        data_tests: [unique, not_null]
+        description: "NOT RELIABLE. 8,326 of the 8,412 events that have both a project and an organization point to a project of a different organization. 3,526 events have no project. The test below only checks that the project exists, not that it is the right one."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_projects')
+                field: project_id
+      - name: event_name
+        description: "15 names appear. 13 are valid product behaviors. unknown_event (257) and legacy_unknown_action (25) are kept here and excluded in the intermediate layer."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['signup', 'visit_pricing', 'view_docs', 'connect_repository', 'create_project', 'first_pipeline', 'run_workflow', 'run_test', 'successful_pipeline', 'failed_pipeline', 'invite_member', 'use_parallelism', 'start_trial']
+              config:
+                severity: warn
+      - name: event_timestamp
+        description: "10 events are dated 1 Sep 2026 or later, after the data ends on 31 Aug 2026. Kept, flagged by the warn test."
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                max_value: "timestamptz '2026-09-01 00:00:00+00'"
+                inclusive: false
+              config:
+                severity: warn
+      - name: plan_type
+        description: "NOT RELIABLE. Not the organization's plan at the time of the event: every organization shows all 4 plans across its events. Use the plan on stg_organizations instead."
