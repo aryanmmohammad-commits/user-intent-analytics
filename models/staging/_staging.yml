@@ -8,3 +8,35 @@ models:
         data_tests: [unique, not_null]
       - name: user_id
         data_tests: [not_null]
+
+  - name: stg_users
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+
+  - name: stg_organizations
+    columns:
+      - name: organization_id
+        data_tests: [unique, not_null]
+
+  - name: stg_projects
+    columns:
+      - name: project_id
+        data_tests: [unique, not_null]
+
+  - name: stg_pipelines
+    description: Pipelines with types fixed and exact duplicate rows removed.
+    columns:
+      - name: pipeline_id
+        data_tests: [unique, not_null]
+
+  - name: stg_workflows
+    columns:
+      - name: workflow_id
+        data_tests: [unique, not_null]
+
+  - name: stg_jobs
+    description: Jobs with types fixed; duration recomputed from start and stop times.
+    columns:
+      - name: job_id
+        data_tests: [unique, not_null]
