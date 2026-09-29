@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: int_product_events
+    description: "One row per event. Same 12,000 rows as stg_product_events. Missing organization_id filled from the user. Two flags added: is_valid_event_name and is_within_data_period. Nothing is deleted yet."
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: organization_id
+        description: "Filled from the user when the event had none (see organization_was_filled)."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_organizations')
+                field: organization_id
