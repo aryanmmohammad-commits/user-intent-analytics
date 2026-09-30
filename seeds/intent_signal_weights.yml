@@ -1,0 +1,60 @@
+version: 2
+
+seeds:
+  - name: intent_signal_weights
+    description: >
+      Intent Signal Framework v0. Grain: one row per behavior (13 product events
+      plus pipelines_run from the CI records). Weights are expert guesses, not yet
+      validated against upgrades. Change weights here, never in SQL.
+    config:
+      column_types:
+        behavior: varchar
+        source: varchar
+        family: varchar
+        weight: integer
+        in_org_score: boolean
+        in_user_score: boolean
+        description: varchar
+    columns:
+      - name: behavior
+        description: Event name, or pipelines_run for the CI measure.
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('user_intent_events')
+                field: event_name
+              config:
+                where: "source = 'event'"
+      - name: source
+        description: event = product events; ci = CI records.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['event', 'ci']
+      - name: family
+        description: setup, usage or buying.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['setup', 'usage', 'buying']
+      - name: weight
+        description: Points per occurrence in the 90-day window.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: in_org_score
+        description: True if this behavior counts in fct_org_intent_score.
+        data_tests:
+          - not_null
+      - name: in_user_score
+        description: True if this behavior counts in fct_user_intent_score.
+        data_tests:
+          - not_null
+      - name: description
+        description: Plain-English meaning and the reason for the weight, for Sales and agents.
