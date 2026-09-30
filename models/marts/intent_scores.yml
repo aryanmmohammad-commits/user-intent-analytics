@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: fct_user_intent_score
+    description: >
+      Mart (fact). Grain: one user per run date. user_usage_score and user_buying_score
+      come from the user's events in the 90-day window (int_scored_events rows with
+      in_user_score). is_contact marks the top user in each organization, the person
+      Sales calls (PQL candidate). Score version v0, unvalidated.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['organization_id']
+          config:
+            where: "is_contact"
+    columns:
+      - name: user_id
+        data_tests:
+          - unique
+          - not_null
+      - name: rank_in_org
+        data_tests:
+          - not_null
+
+  - name: fct_org_intent_score
+    description: >
+      Mart (fact). Grain: one eligible organization (active, not Enterprise) per run date.
+      usage_score = pipelines run in the CI records times the seed weight, plus event usage
+      points divided by the organization's users (removes headcount bias). buying_score =
+      event buying points. PQA = top third on both among eligible organizations. Sales reads
+      this list weekly. Score version v0: expert weights, not yet validated against upgrades.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['organization_id', 'run_date']
+    columns:
+      - name: organization_id
+        data_tests:
+          - not_null
+      - name: usage_score
+        data_tests:
+          - not_null
+      - name: buying_score
+        data_tests:
+          - not_null
+      - name: quadrant
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pqa', 'heavy_user', 'tyre_kicker', 'not_now']

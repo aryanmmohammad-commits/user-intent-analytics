@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: int_scored_events
+    description: >
+      Intermediate. Grain: one product event inside the 90-day window ending on the
+      run date (var run_date, default 2026-08-31), with family, weight and score flags
+      from intent_signal_weights. All organizations kept; the score marts decide eligibility.
+    columns:
+      - name: event_id
+        data_tests:
+          - unique
+          - not_null
+      - name: organization_id
+        data_tests:
+          - not_null
+      - name: user_id
+        data_tests:
+          - not_null
+      - name: weight
+        data_tests:
+          - not_null
