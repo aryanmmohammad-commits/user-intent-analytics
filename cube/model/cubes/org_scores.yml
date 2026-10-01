@@ -1,0 +1,57 @@
+cubes:
+  - name: org_scores
+    description: >
+      Project 02 intent score, one row per eligible organization per run date
+      (dbt mart fct_org_intent_score). Score v0: expert weights, not yet validated.
+    sql: >
+      SELECT * FROM read_parquet('/cube/conf/data/fct_org_intent_score.parquet')
+
+    dimensions:
+      - name: org_run_key
+        description: Grain key. One organization on one run date.
+        sql: "organization_id || '|' || CAST(run_date AS VARCHAR)"
+        type: string
+        primary_key: true
+
+      - name: organization_id
+        sql: organization_id
+        type: string
+
+      - name: run_date
+        sql: "CAST(run_date AS TIMESTAMP)"
+        type: time
+
+      - name: quadrant
+        description: "pqa, heavy_user, tyre_kicker or not_now"
+        sql: quadrant
+        type: string
+
+      - name: plan_type
+        sql: plan_type
+        type: string
+
+      - name: is_pqa
+        sql: is_pqa
+        type: boolean
+
+      - name: contact_user_id
+        description: The user Sales should contact in this organization.
+        sql: contact_user_id
+        type: string
+
+    measures:
+      - name: eligible_orgs
+        description: Active, non-Enterprise organizations scored on the run date.
+        type: count
+
+      - name: pqa_count
+        description: Organizations in the top third on both usage and buying.
+        type: count
+        filters:
+          - sql: "{CUBE}.is_pqa = TRUE"
+
+      - name: pqa_share
+        description: PQAs as a share of eligible organizations.
+        type: number
+        sql: "1.0 * {pqa_count} / NULLIF({eligible_orgs}, 0)"
+        format: percent

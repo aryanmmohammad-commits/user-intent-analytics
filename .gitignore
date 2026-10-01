@@ -6,3 +6,5 @@ logs/
 
 *.duckdb
 dbt_internal_packages/
+
+cube/data/
