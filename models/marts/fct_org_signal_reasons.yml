@@ -1,0 +1,49 @@
+version: 2
+
+models:
+  - name: fct_org_signal_reasons
+    description: >
+      Mart (fact). Grain: one eligible organization per run date per scoring signal.
+      The receipt behind fct_org_intent_score: points each signal added, and where the org
+      ranks against other eligible orgs on it. Reason rule v0 (Aryan, 2 Oct 2026): top third
+      on the signal (pct_rank >= 2/3), ranked by stand-out, max 3 per org.
+      Read by Cube, the agent (explain_account) and the Monday brief.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [organization_id, run_date, signal]
+    columns:
+      - name: organization_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_org_intent_score')
+                field: organization_id
+      - name: signal
+        description: A scoring behavior from the intent_signal_weights seed.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('intent_signal_weights')
+                field: behavior
+      - name: family
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['usage', 'buying']
+      - name: points
+        description: Points this signal added to usage_score or buying_score.
+        data_tests:
+          - not_null
+      - name: pct_rank
+        description: Share of other eligible orgs this org beats on this signal (0 to 1).
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: reason_text
+        description: Readable reason for Sales. Null when the signal is not a reason.
