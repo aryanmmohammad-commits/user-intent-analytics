@@ -1,42 +1,90 @@
 cubes:
   - name: org_scores
     description: >
-      Project 02 intent score, one row per eligible organization per run date
-      (dbt mart fct_org_intent_score). Score v0: expert weights, not yet validated.
+      Intent score v0. One row per eligible organization (active, not Enterprise) per run
+      date, from dbt mart fct_org_intent_score. Expert weights, not yet validated against
+      upgrades. Scores are stored exact; format only changes how they are shown.
     sql: >
       SELECT * FROM read_parquet('/cube/conf/data/fct_org_intent_score.parquet')
 
     dimensions:
       - name: org_run_key
-        description: Grain key. One organization on one run date.
-        sql: "organization_id || '|' || CAST(run_date AS VARCHAR)"
+        description: Grain key, one organization on one run date.
+        sql: "{CUBE}.organization_id || '|' || CAST({CUBE}.run_date AS VARCHAR)"
         type: string
         primary_key: true
+        public: false
 
       - name: organization_id
-        sql: organization_id
+        description: Organization identifier.
+        sql: "{CUBE}.organization_id"
         type: string
 
       - name: run_date
-        sql: "CAST(run_date AS TIMESTAMP)"
+        description: Date the score was computed. The evidence window is the 90 days ending on it.
+        sql: "CAST({CUBE}.run_date AS TIMESTAMP)"
         type: time
 
       - name: quadrant
-        description: "pqa, heavy_user, tyre_kicker or not_now"
-        sql: quadrant
-        type: string
-
-      - name: plan_type
-        sql: plan_type
+        description: >
+          Box from the two ranks. pqa = top third on usage and buying, heavy_user = usage
+          only, tyre_kicker = buying only, not_now = neither.
+        sql: "{CUBE}.quadrant"
         type: string
 
       - name: is_pqa
-        sql: is_pqa
+        description: True when the organization is a product-qualified account (quadrant pqa).
+        sql: "{CUBE}.is_pqa"
         type: boolean
 
+      - name: plan_type
+        description: The organization's current plan. A snapshot, there is no plan history.
+        sql: "{CUBE}.plan_type"
+        type: string
+
       - name: contact_user_id
-        description: The user Sales should contact in this organization.
-        sql: contact_user_id
+        description: The user Sales should ask for, the top user intent score in the organization.
+        sql: "{CUBE}.contact_user_id"
+        type: string
+
+      - name: n_users
+        description: Users in the organization.
+        sql: "{CUBE}.n_users"
+        type: number
+
+      - name: pipelines_run
+        description: CI pipelines the organization ran in the 90-day window.
+        sql: "{CUBE}.pipelines_run"
+        type: number
+
+      - name: usage_score
+        description: Pipelines run times their weight, plus event usage points divided by users.
+        sql: "{CUBE}.usage_score"
+        type: number
+
+      - name: buying_score
+        description: Event buying points (visit_pricing, start_trial) in the 90-day window.
+        sql: "{CUBE}.buying_score"
+        type: number
+
+      - name: intent_score
+        description: usage_score plus buying_score. Used only to sort the list.
+        sql: "{CUBE}.intent_score"
+        type: number
+
+      - name: usage_pct_rank
+        description: Share of eligible organizations this one beats on usage_score, 0 to 1.
+        sql: "{CUBE}.usage_pct_rank"
+        type: number
+
+      - name: buying_pct_rank
+        description: Share of eligible organizations this one beats on buying_score, 0 to 1.
+        sql: "{CUBE}.buying_pct_rank"
+        type: number
+
+      - name: score_version
+        description: Version of the scoring rules. v0 means unvalidated.
+        sql: "{CUBE}.score_version"
         type: string
 
     measures:
@@ -55,3 +103,20 @@ cubes:
         type: number
         sql: "1.0 * {pqa_count} / NULLIF({eligible_orgs}, 0)"
         format: percent
+
+      - name: total_pipelines_run
+        description: CI pipelines run in the 90-day window, summed over organizations.
+        type: sum
+        sql: "{CUBE}.pipelines_run"
+
+      - name: avg_usage_score
+        description: Average usage_score over organizations. Shown with 2 decimals, stored exact.
+        type: avg
+        sql: "{CUBE}.usage_score"
+        format: ".2f"
+
+      - name: avg_buying_score
+        description: Average buying_score over organizations. Shown with 2 decimals, stored exact.
+        type: avg
+        sql: "{CUBE}.buying_score"
+        format: ".2f"

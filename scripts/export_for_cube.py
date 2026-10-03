@@ -10,7 +10,12 @@ Why Parquet instead of letting Cube open dev.duckdb:
 import pathlib
 import duckdb
 
-MARTS = ["fct_org_intent_score", "fct_user_intent_score", "user_intent_events"]
+MARTS = [
+    "fct_org_intent_score",
+    "fct_user_intent_score",
+    "fct_org_signal_reasons",
+    "user_intent_events",
+]
 OUT = pathlib.Path("cube/data")
 OUT.mkdir(parents=True, exist_ok=True)
 

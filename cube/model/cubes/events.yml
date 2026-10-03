@@ -1,0 +1,62 @@
+cubes:
+  - name: events
+    description: >
+      Trusted product events, one row per event, from dbt mart user_intent_events. Valid
+      event name, dated inside the data period (to 31 Aug 2026), one-time events kept once
+      per user. These are behaviors, not commercial intent. Not joined to the score cubes
+      (they are snapshots per run date), so filter events by organization_id or user_id.
+    sql: >
+      SELECT * FROM read_parquet('/cube/conf/data/user_intent_events.parquet')
+
+    dimensions:
+      - name: event_id
+        description: Event identifier.
+        sql: "{CUBE}.event_id"
+        type: string
+        primary_key: true
+        public: true
+
+      - name: user_id
+        description: User who did the event.
+        sql: "{CUBE}.user_id"
+        type: string
+
+      - name: organization_id
+        description: Organization of the event, filled from the user when it was missing.
+        sql: "{CUBE}.organization_id"
+        type: string
+
+      - name: event_name
+        description: One of the 13 accepted event names, for example visit_pricing or start_trial.
+        sql: "{CUBE}.event_name"
+        type: string
+
+      - name: event_timestamp
+        description: When the event happened, UTC.
+        sql: "{CUBE}.event_timestamp"
+        type: time
+
+      - name: organization_was_filled
+        description: True when the event had no organization and it was filled from the user.
+        sql: "{CUBE}.organization_was_filled"
+        type: boolean
+
+      - name: user_event_occurrence
+        description: How many times the user had done this event up to this one, 1 = first time.
+        sql: "{CUBE}.user_event_occurrence"
+        type: number
+
+    measures:
+      - name: event_count
+        description: Trusted product events.
+        type: count
+
+      - name: active_users
+        description: Distinct users with at least one event.
+        type: count_distinct
+        sql: "{CUBE}.user_id"
+
+      - name: active_orgs
+        description: Distinct organizations with at least one event.
+        type: count_distinct
+        sql: "{CUBE}.organization_id"

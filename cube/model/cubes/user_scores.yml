@@ -1,0 +1,84 @@
+cubes:
+  - name: user_scores
+    description: >
+      User intent score v0. One row per user per run date, from dbt mart
+      fct_user_intent_score. Picks the contact Sales asks for in each organization. Covers
+      every user, including users of organizations that are not eligible (they have no
+      org_scores row).
+    sql: >
+      SELECT * FROM read_parquet('/cube/conf/data/fct_user_intent_score.parquet')
+
+    joins:
+      - name: org_scores
+        relationship: many_to_one
+        sql: "{CUBE}.organization_id = {org_scores}.organization_id AND {CUBE}.run_date = {org_scores}.run_date"
+
+    dimensions:
+      - name: user_run_key
+        description: Grain key, one user on one run date.
+        sql: "{CUBE}.user_id || '|' || CAST({CUBE}.run_date AS VARCHAR)"
+        type: string
+        primary_key: true
+        public: false
+
+      - name: user_id
+        description: User identifier.
+        sql: "{CUBE}.user_id"
+        type: string
+
+      - name: organization_id
+        description: The user's organization.
+        sql: "{CUBE}.organization_id"
+        type: string
+
+      - name: run_date
+        description: Date the score was computed. The evidence window is the 90 days ending on it.
+        sql: "CAST({CUBE}.run_date AS TIMESTAMP)"
+        type: time
+
+      - name: user_usage_score
+        description: Sum of usage weights over the user's events in the window.
+        sql: "{CUBE}.user_usage_score"
+        type: number
+
+      - name: user_buying_score
+        description: Sum of buying weights over the user's events in the window.
+        sql: "{CUBE}.user_buying_score"
+        type: number
+
+      - name: user_intent_score
+        description: user_usage_score plus user_buying_score.
+        sql: "{CUBE}.user_intent_score"
+        type: number
+
+      - name: rank_in_org
+        description: Rank of the user inside the organization, 1 = highest user_intent_score.
+        sql: "{CUBE}.rank_in_org"
+        type: number
+
+      - name: is_contact
+        description: True for the one user per organization that Sales should ask for.
+        sql: "{CUBE}.is_contact"
+        type: boolean
+
+      - name: last_event_at
+        description: The user's latest scored event in the window.
+        sql: "{CUBE}.last_event_at"
+        type: time
+
+    measures:
+      - name: user_count
+        description: Users scored on the run date.
+        type: count
+
+      - name: contact_count
+        description: Users marked as the contact for their organization.
+        type: count
+        filters:
+          - sql: "{CUBE}.is_contact = TRUE"
+
+      - name: avg_user_intent_score
+        description: Average user_intent_score over users. Shown with 2 decimals, stored exact.
+        type: avg
+        sql: "{CUBE}.user_intent_score"
+        format: ".2f"

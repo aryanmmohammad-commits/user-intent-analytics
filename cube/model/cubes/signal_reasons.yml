@@ -1,0 +1,97 @@
+cubes:
+  - name: signal_reasons
+    description: >
+      The receipt behind org_scores. One row per eligible organization per run date per
+      scoring signal, from dbt mart fct_org_signal_reasons. Reason rule v0 - a signal is a
+      reason when the organization is in the top third on it, ranked by stand-out, max 3.
+    sql: >
+      SELECT * FROM read_parquet('/cube/conf/data/fct_org_signal_reasons.parquet')
+
+    joins:
+      - name: org_scores
+        relationship: many_to_one
+        sql: "{CUBE}.organization_id = {org_scores}.organization_id AND {CUBE}.run_date = {org_scores}.run_date"
+
+    dimensions:
+      - name: signal_row_key
+        description: Grain key, one organization, run date and signal.
+        sql: "{CUBE}.organization_id || '|' || CAST({CUBE}.run_date AS VARCHAR) || '|' || {CUBE}.signal"
+        type: string
+        primary_key: true
+        public: false
+
+      - name: organization_id
+        description: Organization identifier.
+        sql: "{CUBE}.organization_id"
+        type: string
+
+      - name: run_date
+        description: Date the score was computed.
+        sql: "CAST({CUBE}.run_date AS TIMESTAMP)"
+        type: time
+
+      - name: signal
+        description: A scoring behavior from the intent_signal_weights seed, for example pipelines_run.
+        sql: "{CUBE}.signal"
+        type: string
+
+      - name: family
+        description: usage or buying.
+        sql: "{CUBE}.family"
+        type: string
+
+      - name: weight
+        description: Points per event in score v0 (per pipeline for pipelines_run).
+        sql: "{CUBE}.weight"
+        type: number
+
+      - name: event_count
+        description: Events behind this signal in the 90-day window (pipelines for pipelines_run).
+        sql: "{CUBE}.event_count"
+        type: number
+
+      - name: points
+        description: Points this signal added to usage_score or buying_score.
+        sql: "{CUBE}.points"
+        type: number
+
+      - name: pct_rank
+        description: Share of eligible organizations this one beats on this signal, 0 to 1.
+        sql: "{CUBE}.pct_rank"
+        type: number
+
+      - name: standout_rank
+        description: Rank of this signal inside the organization by pct_rank, 1 = stands out most.
+        sql: "{CUBE}.standout_rank"
+        type: number
+
+      - name: is_reason
+        description: True when this signal is one of the organization's stated reasons.
+        sql: "{CUBE}.is_reason"
+        type: boolean
+
+      - name: reason_rank
+        description: Position among the organization's reasons, 1 to 3. Empty when not a reason.
+        sql: "{CUBE}.reason_rank"
+        type: number
+
+      - name: reason_text
+        description: The sentence Sales reads. Empty when not a reason.
+        sql: "{CUBE}.reason_text"
+        type: string
+
+      - name: last_seen_at
+        description: Latest event behind this signal in the window.
+        sql: "{CUBE}.last_seen_at"
+        type: time
+
+    measures:
+      - name: signal_rows
+        description: Organization-signal rows, 6 signals per eligible organization.
+        type: count
+
+      - name: reason_count
+        description: Signals that are stated reasons.
+        type: count
+        filters:
+          - sql: "{CUBE}.is_reason = TRUE"

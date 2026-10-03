@@ -1,3 +1,4 @@
+-- Scores are stored exact. Rounding happens only where people read them (Cube format, reason_text). 2 Oct 2026.
 -- Mart (fact). Grain: one eligible organization (active, not Enterprise) per run date.
 -- usage_score  = pipelines run (CI records) x seed weight + event usage points / users.
 --                Dividing the event part by users removes the headcount bias (decision B, 30 Sep).
@@ -92,11 +93,11 @@ select
     n_users,
     pipelines_run,
     event_usage_points,
-    round(usage_score, 2) as usage_score,
+    usage_score,
     buying_score,
-    round(intent_score, 2) as intent_score,
-    round(usage_pct_rank, 2) as usage_pct_rank,
-    round(buying_pct_rank, 2) as buying_pct_rank,
+    intent_score,
+    usage_pct_rank,
+    buying_pct_rank,
     case
         when usage_pct_rank >= 2.0 / 3 and buying_pct_rank >= 2.0 / 3 then 'pqa'
         when usage_pct_rank >= 2.0 / 3 then 'heavy_user'
