@@ -57,7 +57,9 @@ logging.basicConfig(
 log = logging.getLogger("revenue-signals")
 
 INSTRUCTIONS = """\
-Revenue Signals for the GoalEarn simulation (a CI/CD developer platform).
+Revenue Signals for our CI/CD platform (a developer product; the data is simulated).
+The product has no brand name in this data. Call it "our CI/CD platform" or "the platform".
+GoalEarn is the training program behind this data, not the product: never use it as a product name.
 A PQA (product-qualified account) is an organization Sales should call this week. dbt scores
 every active, non-Enterprise organization each run date, and Cube serves the numbers.
 

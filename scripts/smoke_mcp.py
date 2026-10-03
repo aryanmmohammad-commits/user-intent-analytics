@@ -63,6 +63,8 @@ async def main():
         record(names == EXPECTED_TOOLS, f"tools listed: {', '.join(sorted(names))}")
         read_only = all(t.annotations and t.annotations.read_only_hint for t in tools)
         record(read_only, "every tool is marked read-only")
+        record("not the product" in (client.instructions or ""),
+               "server instructions say GoalEarn is not the product name")
 
         # The answers Cube gives directly, to compare the tools against
         latest = cube_load({
