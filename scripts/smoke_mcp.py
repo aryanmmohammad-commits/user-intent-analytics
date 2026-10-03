@@ -91,6 +91,7 @@ async def main():
         record(all(a["contact_user_id"] and a["reasons"] for a in data["accounts"]),
                "every PQA has a contact and at least one reason")
         record("unvalidated" in data["label"], "the answer carries the v0, unvalidated label")
+        record("Never mention" in data.get("openers_rule", ""), "list_pqas carries the openers rule")
         first = data["accounts"][0]
 
         # 2. explain_account on the top PQA: the receipt must match the total
@@ -106,6 +107,7 @@ async def main():
                    f"explain_account {first['organization_id']}: box {acct['box']}, "
                    f"{len(acct['signals'])} signals, points {points:.2f} vs score {total:.2f}, "
                    f"reasons match list_pqas: {same_reasons}")
+            record("Never mention" in acct.get("openers_rule", ""), "explain_account carries the openers rule")
             change = acct["change_since_previous_run"]
             record(bool(change), f"change since previous run: {change if isinstance(change, str) else json.dumps(change)}")
 

@@ -37,6 +37,10 @@ from pydantic import BaseModel, Field
 
 CUBE_API = os.environ.get("CUBE_API_URL", "http://localhost:4000/cubejs-api/v1").rstrip("/")
 SCORE_LABEL = "Score v0, unvalidated: expert weights, not yet checked against real outcomes."
+OPENERS_RULE = (
+    "Openers: open questions about the buyer's goals. Never mention page visits, docs reading, "
+    "activity counts or dates, and never assume a need. A trial they started may be named plainly."
+)
 SCORE_CUBES = ("org_scores", "user_scores", "signal_reasons")
 MAX_ROWS = 500
 ORG_ID = re.compile(r"^org_\d{4}$")
@@ -60,8 +64,16 @@ every active, non-Enterprise organization each run date, and Cube serves the num
 Rules for answers:
 1. Every number comes from one of these tools. Name the metric and the run date it came from.
 2. The score is v0 and unvalidated. Say so whenever you present scores.
-3. Signals show who is worth talking to, not what they need. Suggest openers as questions,
-   never as pitches.
+3. Signals show who is worth talking to, not what they need. When you suggest openers:
+   - Ask open questions about the buyer's own goals. Never pitch.
+   - Never mention what we observed without them knowing: page visits, docs reading,
+     counts of pipelines or events, or dates of activity. That is for the rep, not the script.
+   - Never assume a problem or a need ("is anything unclear?", "where does it slow you down?").
+   - A step the buyer took with us on purpose, like starting a trial, may be named plainly,
+     without guessing why.
+   Good: "What are you hoping to get done with your CI/CD setup this quarter?"
+   Good: "You started a trial with us. What did you want to find out?"
+   Bad: "I saw you visited our pricing page." Bad: "Where is CI/CD slowing your team down?"
 4. There is no revenue, price or plan-history data. Say so instead of estimating.
 5. These tools only read. Nothing here contacts a customer or changes data.
 Start with list_pqas for "who should I call", explain_account for "why this account",
@@ -311,6 +323,7 @@ def list_pqas(
         "eligible_orgs": eligible,
         "pqa_count": len(accounts),
         "accounts": accounts,
+        "openers_rule": OPENERS_RULE,
         "rule": "A PQA is in the top third on both usage_score and buying_score among "
                 "active, non-Enterprise organizations. Reasons: signals where the organization "
                 "is in the top third, ranked by how much it stands out, at most 3.",
@@ -423,6 +436,7 @@ def explain_account(
             for s in signals
         ],
         "change_since_previous_run": change,
+        "openers_rule": OPENERS_RULE,
         "how_to_read": "usage_beats_pct 95 = more usage than 95% of eligible organizations. "
                        "Points per signal add up to usage_score + buying_score.",
         "evidence": [
