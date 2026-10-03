@@ -8,3 +8,5 @@ logs/
 dbt_internal_packages/
 
 cube/data/
+
+.venv-mcp/
