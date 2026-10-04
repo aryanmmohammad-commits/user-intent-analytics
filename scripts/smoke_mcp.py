@@ -7,9 +7,13 @@ Run from the dbt project folder, with Cube running:
 Exit code 1 on any failure.
 """
 import asyncio
+import csv
 import json
 import os
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 import urllib.parse
 import urllib.request
 
@@ -19,7 +23,10 @@ from mcp.client.stdio import StdioServerParameters
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER = os.path.join(ROOT, "mcp_server", "revenue_signals.py")
 API = os.environ.get("CUBE_API_URL", "http://localhost:4000/cubejs-api/v1").rstrip("/")
-EXPECTED_TOOLS = {"list_metrics", "list_pqas", "explain_account", "query_metric"}
+EXPECTED_TOOLS = {"list_metrics", "list_pqas", "explain_account", "query_metric", "log_outcome",
+                  "review_outcomes", "propose_weight_change"}
+WRITE_TOOLS = {"log_outcome", "propose_weight_change"}
+TEST_OUTCOMES = os.path.join(tempfile.mkdtemp(prefix="smoke_outcomes_"), "outcomes.csv")  # never the real log
 results = []
 
 
@@ -54,15 +61,18 @@ def unpack(result):
 
 
 async def main():
-    env = dict(os.environ, REVENUE_SIGNALS_LOG="WARNING")  # keep the server's query log out of this output
+    env = dict(os.environ, REVENUE_SIGNALS_LOG="WARNING",  # keep the server's query log out of this output
+               REVENUE_SIGNALS_OUTCOMES=TEST_OUTCOMES)
     params = StdioServerParameters(command=sys.executable, args=[SERVER], env=env)
     async with Client(params) as client:
         tools = await client.list_tools()
         tools = tools.tools if hasattr(tools, "tools") else tools
         names = {t.name for t in tools}
         record(names == EXPECTED_TOOLS, f"tools listed: {', '.join(sorted(names))}")
-        read_only = all(t.annotations and t.annotations.read_only_hint for t in tools)
-        record(read_only, "every tool is marked read-only")
+        read_only = all(t.annotations and t.annotations.read_only_hint for t in tools if t.name not in WRITE_TOOLS)
+        writes_safe = all(t.annotations and not t.annotations.read_only_hint and not t.annotations.destructive_hint
+                          for t in tools if t.name in WRITE_TOOLS)
+        record(read_only and writes_safe, "read tools are marked read-only; the 2 write tools are marked not destructive")
         record("not the product" in (client.instructions or ""),
                "server instructions say GoalEarn is not the product name")
 
@@ -145,14 +155,75 @@ async def main():
         _, err = unpack(await client.call_tool("query_metric", {"measures": ["org_scores.revenue"]}))
         record(err is not None and "not on the menu" in err, f"unknown metric refused: {(err or '')[:110]}")
 
-        # 7. list_metrics: the menu every query is checked against
+        # 7. log_outcome writes one test row to a temporary file, and refuses bad input
+        logged, err = unpack(await client.call_tool("log_outcome", {
+            "org_id": first["organization_id"], "outcome": "meeting_booked", "note": "smoke test", "test": True}))
+        with open(TEST_OUTCOMES, newline="", encoding="utf-8") as f:
+            saved = list(csv.DictReader(f))
+        record(err is None and len(saved) == 1 and saved[0]["is_test"] == "true"
+               and saved[0]["outcome"] == "meeting_booked" and saved[0]["run_date"] == latest,
+               f"log_outcome appended 1 test row for {first['organization_id']} on {latest} (temporary file)")
+        _, err_outcome = unpack(await client.call_tool("log_outcome", {"org_id": "org_0057", "outcome": "maybe"}))
+        _, err_org = unpack(await client.call_tool("log_outcome", {"org_id": "org_9999", "outcome": "not_now"}))
+        with open(TEST_OUTCOMES, newline="", encoding="utf-8") as f:
+            still = len(list(csv.DictReader(f)))
+        record(err_outcome is not None and err_org is not None and still == 1,
+               "log_outcome refuses an unknown outcome and an unscored org, and writes nothing for them")
+
+        # 8. review_outcomes and the evidence gate: no weight change without enough called accounts
+        review, err = unpack(await client.call_tool("review_outcomes", {}))
+        if err:
+            record(False, f"review_outcomes: {err}")
+        else:
+            t = review["totals"]
+            record(t["scored_orgs"] > 0 and t["called_orgs"] <= t["scored_orgs"] and "evidence" in review["verdict"],
+                   f"review_outcomes {review['window']['since']}..{review['window']['until']}: "
+                   f"{t['called_orgs']} called of {t['scored_orgs']} scored; {review['verdict']}")
+            before = subprocess.run(["git", "-C", ROOT, "branch", "--list", "proposal/*"],
+                                    capture_output=True, text=True).stdout
+            _, err = unpack(await client.call_tool("propose_weight_change", {
+                "signal": "view_docs", "new_weight": 2,
+                "rationale": "Smoke test: this call must be refused while the evidence gate is closed."}))
+            after = subprocess.run(["git", "-C", ROOT, "branch", "--list", "proposal/*"],
+                                   capture_output=True, text=True).stdout
+            if review["enough_evidence"]:
+                record(True, "evidence gate is open, so the refusal check is skipped (real outcomes exist)")
+            else:
+                record(err is not None and "Refused" in err and before == after,
+                       "propose_weight_change is refused while the evidence gate is closed, and no branch appears")
+
+        # 9. list_metrics: the menu every query is checked against
         menu, err = unpack(await client.call_tool("list_metrics", {}))
         if err:
             record(False, f"list_metrics: {err}")
         else:
             counts = {c: len(v["measures"]) + len(v["dimensions"]) for c, v in menu["cubes"].items()}
-            record(set(counts) >= {"org_scores", "user_scores", "events", "signal_reasons"},
+            record(set(counts) >= {"org_scores", "user_scores", "events", "signal_reasons", "outcomes"},
                    f"list_metrics: {counts}")
+
+
+def proposal_mechanics():
+    """The branch-making part of propose_weight_change, on a throwaway repo (no Cube, no gate)."""
+    sys.path.insert(0, os.path.join(ROOT, "mcp_server"))
+    import revenue_signals as rs
+    repo = Path(tempfile.mkdtemp(prefix="smoke_repo_"))
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout
+    git("init", "-q")
+    git("config", "user.email", "smoke@example.com")
+    git("config", "user.name", "smoke test")
+    (repo / "seeds").mkdir()
+    seed = "event_name,weight,family\nview_docs,1,usage\nstart_trial,5,buying\n"
+    (repo / "seeds" / "intent_signal_weights.csv").write_text(seed, encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "seed")
+    out = rs._open_proposal(repo, "view_docs", 2, "Smoke test rationale long enough to pass.", "evidence")
+    on_branch = git("show", f"{out['branch']}:seeds/intent_signal_weights.csv")
+    on_main = (repo / "seeds" / "intent_signal_weights.csv").read_text(encoding="utf-8")
+    worktrees = git("worktree", "list").count("\n")
+    record(on_branch == seed.replace("view_docs,1,", "view_docs,2,") and on_main == seed and worktrees == 1
+           and not out["pushed"],
+           f"proposal mechanics on a throwaway repo: branch {out['branch']} changes 1 weight "
+           f"({out['old_weight']:g} -> {out['new_weight']:g}), main untouched, worktree cleaned up")
 
 
 def first_error(err):
@@ -172,5 +243,9 @@ if __name__ == "__main__":
     except Exception as err:  # the server failing to start must show, not hide
         err = first_error(err)
         record(False, f"smoke test stopped: {type(err).__name__}: {err}")
+    try:
+        proposal_mechanics()
+    except Exception as err:
+        record(False, f"proposal mechanics: {type(err).__name__}: {err}")
     print(f"\n{sum(results)} of {len(results)} checks pass")
     sys.exit(0 if results and all(results) else 1)

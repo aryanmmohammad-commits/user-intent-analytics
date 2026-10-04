@@ -1,0 +1,53 @@
+version: 2
+
+sources:
+  - name: sales_ops
+    description: >
+      Call outcomes Sales logged after the Monday brief. The log_outcome tool appends them to
+      outcomes/outcomes.csv and scripts/load_outcomes.py loads that file as text. In a company
+      this would be Salesforce task results, landed in the warehouse by an ELT tool.
+    schema: sales_ops
+    tables:
+      - name: pqa_outcomes
+        description: One row per logged outcome. Append-only; a correction is a new row.
+        columns:
+          - name: outcome_id
+            description: Random id given when the outcome was logged.
+            data_tests:
+              - unique
+              - not_null
+
+models:
+  - name: stg_sales_ops__pqa_outcomes
+    description: >
+      Logged call outcomes, typed. One row per logged outcome. Test rows stay here, flagged
+      with is_test; marts drop them.
+    columns:
+      - name: outcome_id
+        description: Random id given when the outcome was logged.
+        data_tests:
+          - unique
+          - not_null
+      - name: logged_at_utc
+        description: When the outcome was logged, UTC.
+        data_tests:
+          - not_null
+      - name: organization_id
+        description: The account that was called.
+        data_tests:
+          - not_null
+      - name: run_date
+        description: The run date of the list the account was called from.
+        data_tests:
+          - not_null
+      - name: outcome
+        description: What happened on the call, one of the five outcome buttons.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['meeting_booked', 'not_now', 'wrong_person', 'already_talking', 'no_reply']
+      - name: is_test
+        description: True when the user said it was a test, not a real call.
+        data_tests:
+          - not_null

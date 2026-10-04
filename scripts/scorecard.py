@@ -1,7 +1,10 @@
-"""Run scorecards for the Revenue Signals agent (GoalEarn Project 03, step 4b).
+"""Run scorecards for the Revenue Signals agent and workflows (GoalEarn Project 03, steps 4b-5).
 
-Reads Claude Code's conversation records for this project folder, splits them into runs
-(one question -> the tools Claude called -> the answer), checks every answer, and writes:
+Reads two kinds of run and checks every answer with the same graders:
+  - agent runs: Claude Code's conversation records for this project folder, split into
+    runs (one question -> the tools Claude called -> the answer)
+  - workflow runs: run records the Monday brief writes to runs/records/*.json
+Then writes:
 
     runs/index.html        every run, newest first, with its verdicts
     runs/<run id>.html     one scorecard per run
@@ -50,7 +53,8 @@ BULLET = re.compile(r"^([-*+]|\d+[.)])\s+")
 
 # ---------------------------------------------------------------- reading the records
 
-def records_folder(cli_value: str | None) -> Path:
+def records_folder(cli_value: str | None) -> Path | None:
+    """Claude Code's records for this folder, or None when there are none (a fresh clone)."""
     if cli_value:
         return Path(cli_value)
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
@@ -64,7 +68,29 @@ def records_folder(cli_value: str | None) -> Path:
                        key=lambda d: d.stat().st_mtime, reverse=True)
         if found:
             return found[0]
-    sys.exit(f"No Claude Code records found for {Path.cwd()} under {projects}")
+    return None
+
+
+def workflow_runs(folder: Path) -> list[dict]:
+    """Runs the Monday brief recorded (runs/records/*.json), in the same shape as agent runs."""
+    runs = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        steps = [{"id": None, "name": s["name"], "input": s.get("input") or {}, "start": when(s.get("start")),
+                  "end": when(s.get("end")), "result": s.get("result"), "error": bool(s.get("error")),
+                  "summary": s.get("summary")} for s in rec.get("steps", [])]
+        runs.append({
+            "kind": "workflow", "session": rec.get("name", "workflow"), "id": path.stem,
+            "question": rec.get("question", path.stem), "start": when(rec.get("started_at")),
+            "end": when(rec.get("ended_at")), "steps": steps, "texts": [], "answer": rec.get("answer", ""),
+            "openers": rec.get("openers"), "usage": {"model call": rec["usage"]} if rec.get("usage") else {},
+            "models": set(rec.get("models") or []), "thinking": 0, "cost_usd": rec.get("cost_usd"),
+            "writer": rec.get("writer"), "source": f"runs/records/{path.name}",
+        })
+    return runs
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -131,7 +157,7 @@ def split_runs(events: list[dict], session: str) -> list[dict]:
             continue
         text = prompt_text(e)
         if text is not None:
-            run = {"session": session, "question": text, "start": when(e.get("timestamp")),
+            run = {"kind": "agent", "session": session, "question": text, "start": when(e.get("timestamp")),
                    "end": when(e.get("timestamp")), "steps": [], "texts": [], "usage": {},
                    "models": set(), "thinking": 0}
             runs.append(run)
@@ -309,7 +335,7 @@ def check(run: dict) -> list[dict]:
     add('Product never called "GoalEarn"', f"{len(named)} time{'s' if len(named) > 1 else ''}" if named else "never",
         "never", not named)
 
-    openers = openers_in(answer)
+    openers = run.get("openers") if run.get("openers") is not None else openers_in(answer)
     if openers:
         broken = []
         for o in openers:
@@ -332,6 +358,8 @@ def short_tool(name: str) -> str:
 
 
 def step_summary(step: dict) -> str:
+    if step.get("summary"):
+        return step["summary"]
     if step["error"]:
         return "failed: " + (step["result"] or "")[:90]
     try:
@@ -482,20 +510,27 @@ def run_page(run: dict) -> str:
             "v0 checks that each value appears somewhere in the results, not that it sits next to the right account."
             "</p></section>")
 
-    stats = [("tool calls", str(len(run["steps"]))), ("model turns", str(len(run["usage"]))),
+    tool_calls = sum(1 for s in run["steps"] if s["result"] is not None or s["name"].startswith("mcp__"))
+    stats = [("tool calls", str(tool_calls)), ("model turns", str(len(run["usage"]))),
              ("seconds", f"{took:.0f}" if took is not None else "?"),
              ("input tokens", f"{t_in:,}"), ("of them read from cache", f"{t_cached:,}"),
              ("output tokens", f"{t_out:,}"), ("thinking steps", str(run["thinking"]))]
     usage = ("<section class='card'><h2>Usage</h2><div class='stats'>"
              + "".join(f"<div class='stat'><b>{v}</b><span>{k}</span></div>" for k, v in stats)
-             + f"</div><p class='meta' style='margin:12px 0 0'>Model: {e(', '.join(sorted(run['models'])) or 'unknown')}. "
-             "Cost is not recorded in Claude Code's records, so it is not shown.</p></section>")
+             + f"</div><p class='meta' style='margin:12px 0 0'>Model: {e(', '.join(sorted(run['models'])) or 'none')}. "
+             + (f"List-price cost of the model call: ${run['cost_usd']:.4f} (from Claude Code's headless result). "
+                if run.get("cost_usd") is not None else
+                "Cost is not recorded in Claude Code's records, so it is not shown. ")
+             + (f"Writer: {e(run['writer'])}." if run.get("writer") else "")
+             + "</p></section>")
 
-    answer = (f"<section class='card'><details><summary>The answer as Claude wrote it</summary>"
+    answer = (f"<section class='card'><details><summary>"
+              f"{'The brief as published' if run.get('kind') == 'workflow' else 'The answer as Claude wrote it'}</summary>"
               f"<p class='answer'>{e(run['answer'] or '(no answer)')}</p></details></section>")
 
     head = (f"<p class='meta'><a href='index.html'>All runs</a></p><h1>{e(run['question'][:140])}</h1>"
-            f"<p class='meta'>Run {e(run['id'])}, {e(local(run['start']))}</p>")
+            f"<p class='meta'>{'Workflow' if run.get('kind') == 'workflow' else 'Agent'} run {e(run['id'])}, "
+            f"{e(local(run['start']))}</p>")
     foot = (f"<p class='foot'>Revenue Signals scorecard, {GRADER_VERSION}. Source: {e(run['source'])}. "
             f"Generated {e(dt.datetime.now().strftime('%d %b %Y, %H:%M'))}.</p>")
     return page(f"Run {run['id']}", head + verdicts + route + checks + evid + usage + answer + foot)
@@ -509,7 +544,8 @@ def index_page(runs: list[dict], skipped: int = 0) -> str:
         ev = r["evidence"]["pct"]
         rows.append(
             f"<tr><td><a href='{e(r['id'])}.html'>{e(r['question'][:90])}</a><br>"
-            f"<span class='meta'>{e(local(r['start']))}</span></td>"
+            f"<span class='meta'>{'Workflow' if r.get('kind') == 'workflow' else 'Agent'} &middot; "
+            f"{e(local(r['start']))}</span></td>"
             f"<td>{chip(r['finished'], 'Yes', 'No')}</td><td>{chip(r['goal'], 'Yes', 'No')}</td>"
             f"<td><span class='chip {'pass' if ev >= EVIDENCE_TARGET else 'gap'}'>{ev:g}%</span></td>"
             f"<td>{e(failed)}</td></tr>")
@@ -529,7 +565,8 @@ def index_page(runs: list[dict], skipped: int = 0) -> str:
              (f"{sum(times) / len(times):.0f} s" if times else "?", "average run time")]
     common = ", ".join(f"{k} ({v})" for k, v in sorted(fails.items(), key=lambda kv: -kv[1])) or "none"
     body = ("<h1>Agent runs</h1>"
-            f"<p class='meta'>Revenue Signals questions asked in Claude Code, newest first.</p>"
+            f"<p class='meta'>Revenue Signals runs, newest first: agent runs are questions asked in Claude Code; "
+            "workflow runs are Monday briefs.</p>"
             "<section class='card'><div class='stats'>"
             + "".join(f"<div class='stat'><b>{v}</b><span>{k}</span></div>" for v, k in stats)
             + f"</div><p class='meta' style='margin:12px 0 0'>Checks failed most: {e(common)}.</p></section>"
@@ -544,6 +581,50 @@ def index_page(runs: list[dict], skipped: int = 0) -> str:
 
 # ---------------------------------------------------------------- main
 
+def build(records: Path | None, out: Path, score_all: bool = False) -> tuple[list[dict], int]:
+    """Read every run, check it, write the pages and the CSV. Returns (runs, skipped questions)."""
+    runs: list[dict] = []
+    skipped = 0
+    if records is not None and records.is_dir():
+        for path in sorted(records.glob("*.jsonl")):
+            for run in split_runs(read_jsonl(path), path.stem):
+                run["source"] = path.name
+                if score_all or any(s["name"].startswith(SCORE_TOOL_PREFIX) for s in run["steps"]):
+                    runs.append(run)
+                else:
+                    skipped += 1
+    runs += workflow_runs(out / "records")
+    if not runs:
+        return runs, skipped
+
+    for r in runs:
+        r["evidence"] = evidence(r["answer"], r["steps"])
+        r["checks"] = check(r)
+        r["finished"] = bool(r["answer"]) and not any(s["error"] for s in r["steps"])
+        r["goal"] = r["finished"] and all(c["ok"] is not False for c in r["checks"])
+
+    out.mkdir(parents=True, exist_ok=True)
+    for r in runs:
+        (out / f"{r['id']}.html").write_text(run_page(r), encoding="utf-8")
+    (out / "index.html").write_text(index_page(runs, skipped), encoding="utf-8")
+    with (out / "agent_runs.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["run_id", "kind", "session", "started_at", "seconds", "question", "tools", "tool_calls",
+                    "model_turns", "input_tokens", "output_tokens", "cost_usd", "finished", "met_goal",
+                    "evidence_pct", "failed_checks"])
+        for r in runs:
+            t_in, _, t_out = tokens(r)
+            took = seconds(r["start"], r["end"])
+            w.writerow([r["id"], r.get("kind", "agent"), r["session"], r["start"].isoformat() if r["start"] else "",
+                        f"{took:.0f}" if took is not None else "", r["question"][:200],
+                        " ".join(short_tool(s["name"]) for s in r["steps"]), len(r["steps"]),
+                        len(r["usage"]), t_in, t_out,
+                        "" if r.get("cost_usd") is None else f"{r['cost_usd']:.4f}",
+                        r["finished"], r["goal"], r["evidence"]["pct"],
+                        "; ".join(c["name"] for c in r["checks"] if c["ok"] is False)])
+    return runs, skipped
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # a console that cannot show a character prints ? instead
@@ -555,52 +636,19 @@ def main() -> int:
     args = ap.parse_args()
 
     folder = records_folder(args.records)
-    runs: list[dict] = []
-    skipped = 0
-    for path in sorted(folder.glob("*.jsonl")):
-        for run in split_runs(read_jsonl(path), path.stem):
-            run["source"] = path.name
-            if args.all or any(s["name"].startswith(SCORE_TOOL_PREFIX) for s in run["steps"]):
-                runs.append(run)
-            else:
-                skipped += 1
-    if not runs:
-        print(f"No Revenue Signals runs found in {folder} ({skipped} other questions skipped)")
-        return 1
-
-    for r in runs:
-        r["evidence"] = evidence(r["answer"], r["steps"])
-        r["checks"] = check(r)
-        r["finished"] = bool(r["answer"]) and not any(s["error"] for s in r["steps"])
-        r["goal"] = r["finished"] and all(c["ok"] is not False for c in r["checks"])
-
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    for r in runs:
-        (out / f"{r['id']}.html").write_text(run_page(r), encoding="utf-8")
-    (out / "index.html").write_text(index_page(runs, skipped), encoding="utf-8")
-    with (out / "agent_runs.csv").open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["run_id", "session", "started_at", "seconds", "question", "tools", "tool_calls",
-                    "model_turns", "input_tokens", "output_tokens", "finished", "met_goal",
-                    "evidence_pct", "failed_checks"])
-        for r in runs:
-            t_in, _, t_out = tokens(r)
-            took = seconds(r["start"], r["end"])
-            w.writerow([r["id"], r["session"], r["start"].isoformat() if r["start"] else "",
-                        f"{took:.0f}" if took is not None else "", r["question"][:200],
-                        " ".join(short_tool(s["name"]) for s in r["steps"]), len(r["steps"]),
-                        len(r["usage"]), t_in, t_out, r["finished"], r["goal"], r["evidence"]["pct"],
-                        "; ".join(c["name"] for c in r["checks"] if c["ok"] is False)])
-
-    print(f"Records: {folder}")
+    runs, skipped = build(folder, out, args.all)
+    print(f"Claude Code records: {folder or 'none found for this folder'}")
+    if not runs:
+        print(f"No Revenue Signals runs found ({skipped} other questions skipped)")
+        return 1
     for r in sorted(runs, key=lambda r: r["start"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc)):
         failed = ", ".join(c["name"] for c in r["checks"] if c["ok"] is False) or "-"
         q = r["question"].replace("\n", " ")
         q = q if len(q) <= 48 else q[:45] + "..."
-        print(f"{r['id']}  {local(r['start']):>19}  finished {'yes' if r['finished'] else 'NO ':3}  "
+        print(f"{r['id']:<26} {local(r['start']):>19}  finished {'yes' if r['finished'] else 'NO ':3}  "
               f"goal {'yes' if r['goal'] else 'NO ':3}  evidence {r['evidence']['pct']:>5g}%  {q}")
-        print(f"             failed checks: {failed}")
+        print(f"{'':27}failed checks: {failed}")
     if skipped:
         print(f"\n{skipped} other questions used no Revenue Signals tool and were not scored (--all scores them).")
     print(f"\nWrote {len(runs)} scorecards, {out / 'index.html'} and {out / 'agent_runs.csv'}")

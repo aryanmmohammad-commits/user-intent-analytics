@@ -1,0 +1,102 @@
+cubes:
+  - name: outcomes
+    description: >
+      What happened after Sales called. One row per scored organization per run date
+      (dbt mart fct_org_outcomes), with the latest real outcome or not_called. Test outcomes
+      are excluded. Rates divide by every account on the list, not only the logged ones.
+    sql: >
+      SELECT * FROM read_parquet('/cube/conf/data/fct_org_outcomes.parquet')
+
+    dimensions:
+      - name: org_run_key
+        description: Grain key, one organization on one run date.
+        sql: "{CUBE}.org_run_key"
+        type: string
+        primary_key: true
+        public: false
+
+      - name: organization_id
+        description: Organization identifier.
+        sql: "{CUBE}.organization_id"
+        type: string
+
+      - name: run_date
+        description: The run date of the list the account was on.
+        sql: "CAST({CUBE}.run_date AS TIMESTAMP)"
+        type: time
+
+      - name: plan_type
+        description: Plan on the run date (free, scale or performance).
+        sql: "{CUBE}.plan_type"
+        type: string
+
+      - name: quadrant
+        description: "Box on the run date: pqa, heavy_user, tyre_kicker or not_now."
+        sql: "{CUBE}.quadrant"
+        type: string
+
+      - name: is_pqa
+        description: True when the organization was a PQA on that run date.
+        sql: "{CUBE}.is_pqa"
+        type: boolean
+
+      - name: outcome
+        description: "Latest real outcome: meeting_booked, not_now, wrong_person, already_talking, no_reply, or not_called."
+        sql: "{CUBE}.outcome"
+        type: string
+
+      - name: was_called
+        description: True when a real outcome was logged for this account and run date.
+        sql: "{CUBE}.was_called"
+        type: boolean
+
+      - name: meeting_booked
+        description: True when the latest outcome is meeting_booked.
+        sql: "{CUBE}.meeting_booked"
+        type: boolean
+
+      - name: outcome_logged_at
+        description: When the latest outcome was logged, UTC.
+        sql: "CAST({CUBE}.outcome_logged_at_utc AS TIMESTAMP)"
+        type: time
+
+    measures:
+      - name: scored_orgs
+        description: Organizations on the scored list for the run date.
+        type: count
+
+      - name: pqa_orgs
+        description: PQAs on the list (the accounts the brief asked Sales to call).
+        type: count
+        filters:
+          - sql: "{CUBE}.is_pqa"
+
+      - name: called_orgs
+        description: Accounts with a real logged outcome, any outcome including no_reply.
+        type: count
+        filters:
+          - sql: "{CUBE}.was_called"
+
+      - name: called_pqas
+        description: PQAs with a real logged outcome.
+        type: count
+        filters:
+          - sql: "{CUBE}.is_pqa"
+          - sql: "{CUBE}.was_called"
+
+      - name: reached_orgs
+        description: Called accounts where someone answered (outcome is not no_reply).
+        type: count
+        filters:
+          - sql: "{CUBE}.was_reached"
+
+      - name: meetings_booked
+        description: Accounts whose latest outcome is meeting_booked.
+        type: count
+        filters:
+          - sql: "{CUBE}.meeting_booked"
+
+      - name: meeting_rate
+        description: Meetings booked divided by called accounts, a share from 0 to 1. Empty when nobody was called.
+        type: number
+        sql: "1.0 * {meetings_booked} / NULLIF({called_orgs}, 0)"

@@ -10,7 +10,7 @@ Why Parquet instead of letting Cube open dev.duckdb:
 import pathlib
 import duckdb
 
-MARTS = [
+MARTS = ["fct_org_outcomes", 
     "fct_org_intent_score",
     "fct_user_intent_score",
     "fct_org_signal_reasons",

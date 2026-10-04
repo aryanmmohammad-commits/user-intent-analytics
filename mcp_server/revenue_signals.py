@@ -1,14 +1,19 @@
-"""Revenue Signals MCP server (GoalEarn Project 03, step 4).
+"""Revenue Signals MCP server (GoalEarn Project 03, steps 4-6).
 
-Four read-only tools over the Cube semantic layer. The agent orders metrics by name;
-it never writes SQL and never opens dev.duckdb.
+Read tools over the Cube semantic layer, one append-only write tool and one proposal tool.
+The agent orders metrics by name; it never writes SQL and never opens dev.duckdb.
 
     list_metrics     the menu: every measure and dimension Cube exposes, with descriptions
     list_pqas        this week's product-qualified accounts, with contact and reasons
     explain_account  why one organization scores where it does, with the evidence
     query_metric     any governed metric by name, through Cube
+    log_outcome      records what happened after a call (append-only file, never edits)
+    review_outcomes  the monthly review: did flagged accounts book meetings, and with which signals
+    propose_weight_change  opens a git branch (and pull request) changing one weight; a human merges.
+                     Refused unless review_outcomes finds enough evidence. Never touches main.
 
-The write tools (log_outcome, propose_weight_change) arrive in steps 5 and 6.
+Outcomes go to outcomes/outcomes.csv (override with REVENUE_SIGNALS_OUTCOMES). They reach
+Cube on the weekly refresh: load_outcomes.py -> dbt build -> export_for_cube.py.
 
 Run by the MCP host (Claude Code) over stdio. Over stdio, stdout is the protocol pipe,
 so this file never prints: logs go to stderr.
@@ -18,16 +23,22 @@ Override the address with the CUBE_API_URL environment variable.
 """
 from __future__ import annotations
 
+import csv
+import datetime as dt
 import difflib
 import json
 import logging
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -41,12 +52,26 @@ OPENERS_RULE = (
     "Openers: open questions about the buyer's goals. Never mention page visits, docs reading, "
     "activity counts or dates, and never assume a need. A trial they started may be named plainly."
 )
-SCORE_CUBES = ("org_scores", "user_scores", "signal_reasons")
+SCORE_CUBES = ("org_scores", "user_scores", "signal_reasons", "outcomes")
+CUBE_NAMES = Literal["org_scores", "user_scores", "events", "signal_reasons", "outcomes"]
+OUTCOMES = ("meeting_booked", "not_now", "wrong_person", "already_talking", "no_reply")
+OUTCOME_COLUMNS = ["outcome_id", "logged_at_utc", "organization_id", "run_date", "outcome",
+                   "note", "is_test", "logged_by"]
+ROOT = Path(__file__).resolve().parent.parent
+OUTCOMES_FILE = Path(os.environ.get("REVENUE_SIGNALS_OUTCOMES") or ROOT / "outcomes" / "outcomes.csv")
+MIN_CALLED = int(os.environ.get("REVENUE_SIGNALS_MIN_CALLED", "30"))  # evidence gate for any weight change
+SEED = Path("seeds") / "intent_signal_weights.csv"  # relative to the repo root
 MAX_ROWS = 500
 ORG_ID = re.compile(r"^org_\d{4}$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+)
+APPEND_ONLY = ToolAnnotations(  # writes, but only adds a row: never edits or deletes
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+)
+PROPOSES = ToolAnnotations(  # creates a branch and may push it to GitHub; never changes main
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
 )
 
 logging.basicConfig(
@@ -77,9 +102,17 @@ Rules for answers:
    Good: "You started a trial with us. What did you want to find out?"
    Bad: "I saw you visited our pricing page." Bad: "Where is CI/CD slowing your team down?"
 4. There is no revenue, price or plan-history data. Say so instead of estimating.
-5. These tools only read. Nothing here contacts a customer or changes data.
+5. Nothing here contacts a customer. One tool writes: log_outcome adds a row to the outcomes
+   log. Call it only when the user tells you what happened on a call, with one of the five
+   outcomes. Set test=true when the user says it is a test. Never log on your own initiative,
+   and never guess an outcome the user did not state.
+6. Weights change only through the monthly review: call review_outcomes first. Call
+   propose_weight_change only when review_outcomes says enough_evidence is true, for one
+   signal, with a modest step and a rationale that cites the numbers. It opens a branch and
+   pull request for a human to review and merge; it never changes the live weights.
 Start with list_pqas for "who should I call", explain_account for "why this account",
-list_metrics to see what can be asked, and query_metric for anything else.
+list_metrics to see what can be asked, query_metric for anything else, log_outcome
+to record a call result, and review_outcomes for the monthly review.
 """
 
 server = MCPServer(name="revenue-signals", instructions=INSTRUCTIONS)
@@ -221,7 +254,7 @@ def _org_row(org_id: str, run_date: str) -> dict | None:
 @server.tool(annotations=READ_ONLY)
 def list_metrics(
     cube: Annotated[
-        Literal["org_scores", "user_scores", "events", "signal_reasons"] | None,
+        CUBE_NAMES | None,
         Field(description="Only this cube. Leave empty for the whole menu."),
     ] = None,
 ) -> dict[str, Any]:
@@ -248,8 +281,9 @@ def list_metrics(
     return {
         "cubes": cubes,
         "notes": [
-            "Score cubes (org_scores, user_scores, signal_reasons) hold one snapshot per run date. "
-            "query_metric pins them to the latest run date unless you filter on a run_date.",
+            "Score cubes (org_scores, user_scores, signal_reasons, outcomes) hold one snapshot per "
+            "run date. query_metric pins them to the latest run date unless you filter on a run_date.",
+            "outcomes counts what Sales logged after calls; test outcomes are excluded.",
             "events is not joined to the score cubes; filter it by organization_id instead.",
             SCORE_LABEL,
         ],
@@ -558,6 +592,278 @@ def query_metric(
     return result
 
 
+@server.tool(annotations=APPEND_ONLY)
+def log_outcome(
+    org_id: Annotated[str, Field(description="Organization id, for example org_0057.")],
+    outcome: Annotated[
+        Literal["meeting_booked", "not_now", "wrong_person", "already_talking", "no_reply"],
+        Field(description="What happened on the call, as the user said it."),
+    ],
+    note: Annotated[str, Field(max_length=300, description="Optional short note from the rep.")] = "",
+    test: Annotated[bool, Field(description="True when the user says this is a test, not a real call.")] = False,
+) -> dict[str, Any]:
+    """Record what happened after Sales called an account. Append-only: adds one row, never edits.
+
+    Use only when the user states the result of a call. The five outcomes: meeting_booked,
+    not_now, wrong_person, already_talking, no_reply. A correction is a new row; the latest row
+    for an organization and run date wins. Test rows are kept apart and never counted.
+    """
+    org_id = org_id.strip()
+    if not ORG_ID.match(org_id):
+        raise ToolError(f"org_id must look like org_0057, got {org_id!r}.")
+    if outcome not in OUTCOMES:
+        raise ToolError(f"outcome must be one of {', '.join(OUTCOMES)}; got {outcome!r}.")
+    note = " ".join(note.split())  # one line, no stray whitespace
+    dates = _run_dates(org_id=org_id, limit=1)
+    if not dates:
+        raise ToolError(f"{org_id} has no score on any run date, so there is no list it was called from.")
+    row = {
+        "outcome_id": uuid.uuid4().hex,
+        "logged_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "organization_id": org_id,
+        "run_date": dates[0],
+        "outcome": outcome,
+        "note": note,
+        "is_test": "true" if test else "false",
+        "logged_by": "claude-code",
+    }
+    OUTCOMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not OUTCOMES_FILE.exists() or OUTCOMES_FILE.stat().st_size == 0
+    with OUTCOMES_FILE.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=OUTCOME_COLUMNS)
+        if new_file:
+            writer.writeheader()
+        writer.writerow(row)
+    log.info("logged outcome %s %s %s test=%s", org_id, dates[0], outcome, test)
+    return {
+        "logged": row,
+        "file": str(OUTCOMES_FILE),
+        "next": "Outcomes reach Cube on the weekly refresh: load_outcomes.py, dbt build, export_for_cube.py.",
+        "note": "Test row: kept apart and never counted." if test else "Counted in outcomes after the refresh.",
+    }
+
+
+# ---------------------------------------------------------------- step 6: monthly review
+
+def _rate(meetings: int, called: int) -> float | None:
+    return None if not called else round(meetings / called, 3)
+
+
+def _review(since: str | None, until: str | None) -> dict[str, Any]:
+    _check_date(since)
+    _check_date(until)
+    until = until or _latest_run_date()
+    since = since or (dt.date.fromisoformat(until) - dt.timedelta(days=30)).isoformat()
+    window = {"member": "outcomes.run_date", "operator": "inDateRange", "values": [since, until]}
+    names = ["scored_orgs", "pqa_orgs", "called_orgs", "called_pqas", "reached_orgs", "meetings_booked"]
+    totals_row = (_load({"measures": [f"outcomes.{n}" for n in names], "filters": [window]}) or [{}])[0]
+    totals = {n: int(_num(totals_row.get(f"outcomes.{n}")) or 0) for n in names}
+
+    called = _load({
+        "dimensions": ["outcomes.organization_id", "outcomes.is_pqa", "outcomes.quadrant",
+                       "outcomes.outcome", "outcomes.meeting_booked"],
+        "timeDimensions": [{"dimension": "outcomes.run_date", "granularity": "day"}],
+        "filters": [window, _true("outcomes.was_called")],
+        "limit": MAX_ROWS,
+    })
+    accounts = [{"org": r["outcomes.organization_id"], "is_pqa": _bool(r["outcomes.is_pqa"]),
+                 "box": r["outcomes.quadrant"], "outcome": r["outcomes.outcome"],
+                 "meeting": _bool(r["outcomes.meeting_booked"]),
+                 "run_date": _day(r.get("outcomes.run_date.day") or r.get("outcomes.run_date"))} for r in called]
+
+    def group(key) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for a in accounts:
+            g = out.setdefault(str(key(a)), {"called": 0, "meetings": 0})
+            g["called"] += 1
+            g["meetings"] += a["meeting"]
+        for g in out.values():
+            g["meeting_rate"] = _rate(g["meetings"], g["called"])
+        return out
+
+    by_signal: dict[str, dict] = {}
+    if accounts:
+        reasons = _load({
+            "dimensions": ["signal_reasons.organization_id", "signal_reasons.signal"],
+            "timeDimensions": [{"dimension": "signal_reasons.run_date", "granularity": "day"}],
+            "filters": [{"member": "signal_reasons.run_date", "operator": "inDateRange", "values": [since, until]},
+                        _true("signal_reasons.is_reason"),
+                        {"member": "signal_reasons.organization_id", "operator": "equals",
+                         "values": sorted({a["org"] for a in accounts})}],
+            "limit": MAX_ROWS,
+        })
+        has = {(r["signal_reasons.organization_id"],
+                _day(r.get("signal_reasons.run_date.day") or r.get("signal_reasons.run_date")),
+                r["signal_reasons.signal"]) for r in reasons}
+        for signal in sorted({k[2] for k in has}):
+            with_it = [a for a in accounts if (a["org"], a["run_date"], signal) in has]
+            without = [a for a in accounts if (a["org"], a["run_date"], signal) not in has]
+            by_signal[signal] = {
+                "called_with_reason": len(with_it), "meetings_with": sum(a["meeting"] for a in with_it),
+                "rate_with": _rate(sum(a["meeting"] for a in with_it), len(with_it)),
+                "called_without": len(without), "meetings_without": sum(a["meeting"] for a in without),
+                "rate_without": _rate(sum(a["meeting"] for a in without), len(without)),
+            }
+
+    enough = totals["called_orgs"] >= MIN_CALLED
+    return {
+        "window": {"since": since, "until": until},
+        "label": SCORE_LABEL,
+        "totals": totals,
+        "meeting_rate_called": _rate(totals["meetings_booked"], totals["called_orgs"]),
+        "by_pqa": group(lambda a: "pqa" if a["is_pqa"] else "not_pqa"),
+        "by_box": group(lambda a: a["box"]),
+        "by_outcome": {k: v["called"] for k, v in group(lambda a: a["outcome"]).items()},
+        "by_signal": by_signal,
+        "min_called": MIN_CALLED,
+        "enough_evidence": enough,
+        "verdict": (f"Enough evidence to discuss weights: {totals['called_orgs']} called accounts "
+                    f"(minimum {MIN_CALLED})." if enough else
+                    f"Not enough evidence to change any weight: {totals['called_orgs']} called accounts "
+                    f"in the window, the minimum is {MIN_CALLED}. Keep logging outcomes."),
+        "caveats": [
+            "Reps choose whom to call, so this is observed evidence, not an experiment.",
+            "Signal rates compare called accounts with and without that signal as a reason.",
+            "Test outcomes are excluded. Accounts never called are not counted as failures.",
+        ],
+        "evidence": ["outcomes.scored_orgs", "outcomes.called_orgs", "outcomes.meetings_booked",
+                     "outcomes.outcome", "signal_reasons.is_reason"],
+    }
+
+
+@server.tool(annotations=READ_ONLY)
+def review_outcomes(
+    since: Annotated[str | None, Field(description="First run date, YYYY-MM-DD. Default: 30 days before until.")] = None,
+    until: Annotated[str | None, Field(description="Last run date, YYYY-MM-DD. Default: the latest run date.")] = None,
+) -> dict[str, Any]:
+    """The monthly review: did the accounts we flagged turn into meetings, and which signals went
+    with meetings? Totals, meeting rates for PQAs vs other called accounts, by box, by outcome and
+    per signal, plus the evidence gate (enough_evidence) that propose_weight_change obeys.
+    """
+    return _review(since, until)
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8")
+    if done.returncode != 0:
+        raise ToolError(f"git {' '.join(args[:2])} failed: {(done.stderr or done.stdout).strip()[:300]}")
+    return done.stdout.strip()
+
+
+def _seed_change(text: str, signal: str, new_weight: float) -> tuple[str, float]:
+    """Change one weight cell in the seed CSV, leaving every other byte as it was."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(newline)
+    header = next(csv.reader([lines[0]]))
+    if "weight" not in header:
+        raise ToolError(f"{SEED} has no weight column (columns: {', '.join(header)}).")
+    w = header.index("weight")
+    for i, line in enumerate(lines[1:], start=1):
+        if not line:
+            continue
+        cells = next(csv.reader([line]))
+        if signal in cells:
+            old = float(cells[w])
+            cells[w] = f"{new_weight:g}"
+            buf = __import__("io").StringIO()
+            csv.writer(buf, lineterminator="").writerow(cells)
+            lines[i] = buf.getvalue()
+            return newline.join(lines), old
+    raise ToolError(f"{signal!r} is not a row in {SEED}.")
+
+
+def _github_compare_url(remote: str, base: str, branch: str) -> str | None:
+    m = re.match(r"(?:https://github\.com/|git@github\.com:)([^/]+)/(.+?)(?:\.git)?$", remote)
+    return f"https://github.com/{m.group(1)}/{m.group(2)}/compare/{base}...{branch}?expand=1" if m else None
+
+
+def _open_proposal(repo: Path, signal: str, new_weight: float, rationale: str, evidence_md: str) -> dict:
+    """Commit the change on a new branch in a separate worktree, so the working folder and main
+    never change. Push it when the repo has a GitHub remote; a human opens and merges the PR."""
+    base = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    day = dt.date.today().isoformat()
+    branch = f"proposal/weight-{signal}-{day}"
+    n = 2
+    while _git(repo, "branch", "--list", branch):
+        branch, n = f"proposal/weight-{signal}-{day}-{n}", n + 1
+    tmp = Path(tempfile.mkdtemp(prefix="weight_proposal_"))
+    work = tmp / "work"
+    _git(repo, "worktree", "add", "-b", branch, str(work), "HEAD")
+    try:
+        seed = work / SEED
+        if not seed.exists():
+            raise ToolError(f"{SEED} is not in the committed repo.")
+        text, old = _seed_change(seed.read_bytes().decode("utf-8"), signal, new_weight)
+        if abs(old - new_weight) < 1e-9:
+            raise ToolError(f"{signal} already has weight {old:g}.")
+        seed.write_bytes(text.encode("utf-8"))
+        note = work / "proposals" / f"{day}-{signal}.md"
+        note.parent.mkdir(exist_ok=True)
+        note.write_text(
+            f"# Proposal: {signal} weight {old:g} -> {new_weight:g}\n\n"
+            f"Opened by the monthly review on {day}. A human reviews and merges; nothing changes until then.\n\n"
+            f"## Why\n\n{rationale}\n\n## Evidence\n\n{evidence_md}\n\n"
+            f"## After merging\n\nRun scripts/weekly_refresh.ps1 (dbt build, export, checks, brief).\n",
+            encoding="utf-8")
+        _git(work, "add", str(SEED), str(note.relative_to(work)))
+        _git(work, "commit", "-m", f"Propose weight change: {signal} {old:g} -> {new_weight:g}",
+             "-m", "Opened by the monthly review (propose_weight_change). Human review required.")
+        commit = _git(work, "rev-parse", "--short", "HEAD")
+    except Exception:
+        _git(repo, "worktree", "remove", "--force", str(work))
+        _git(repo, "branch", "-D", branch)
+        raise
+    _git(repo, "worktree", "remove", "--force", str(work))
+    out = {"branch": branch, "commit": commit, "base": base, "old_weight": old, "new_weight": new_weight,
+           "files": [str(SEED).replace("\\", "/"), f"proposals/{day}-{signal}.md"], "pushed": False}
+    remote = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"],
+                            capture_output=True, text=True).stdout.strip()
+    if remote:
+        pushed = subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", branch],
+                                capture_output=True, text=True)
+        out["pushed"] = pushed.returncode == 0
+        out["pull_request_url"] = _github_compare_url(remote, base, branch) if out["pushed"] else None
+        if not out["pushed"]:
+            out["push_error"] = (pushed.stderr or "").strip()[:300]
+    if not out["pushed"]:
+        out["how_to_push"] = f"git push -u origin {branch}  (then open a pull request into {base})"
+    return out
+
+
+@server.tool(annotations=PROPOSES)
+def propose_weight_change(
+    signal: Annotated[str, Field(description="The signal to change, for example view_docs.")],
+    new_weight: Annotated[float, Field(ge=0, le=20, description="The proposed weight, 0 to 20.")],
+    rationale: Annotated[str, Field(min_length=40, max_length=2000,
+                                    description="Why, citing the review numbers.")],
+) -> dict[str, Any]:
+    """Propose one weight change as a git branch and pull request. A human reviews and merges.
+
+    Refused unless review_outcomes finds enough evidence (enough_evidence true). Changes one row
+    of the intent_signal_weights seed on a new branch, adds a proposal note, and pushes the branch
+    when the repo has a GitHub remote. The live weights and the main branch never change here.
+    """
+    review = _review(None, None)
+    if not review["enough_evidence"]:
+        raise ToolError("Refused: " + review["verdict"])
+    if not re.match(r"^[a-z_]+$", signal):
+        raise ToolError(f"signal must look like view_docs, got {signal!r}.")
+    t = review["totals"]
+    s = review["by_signal"].get(signal, {})
+    evidence_md = (
+        f"Window {review['window']['since']} to {review['window']['until']}. "
+        f"Called {t['called_orgs']} accounts, {t['meetings_booked']} meetings booked "
+        f"(meeting rate {review['meeting_rate_called']}).\n\n"
+        f"| {signal} | called | meetings | meeting rate |\n|---|---|---|---|\n"
+        f"| reason | {s.get('called_with_reason', 0)} | {s.get('meetings_with', 0)} | {s.get('rate_with')} |\n"
+        f"| not a reason | {s.get('called_without', 0)} | {s.get('meetings_without', 0)} | {s.get('rate_without')} |\n\n"
+        + "\n".join(f"- {c}" for c in review["caveats"]))
+    result = _open_proposal(ROOT, signal, new_weight, rationale.strip(), evidence_md)
+    log.info("proposed %s %s -> %s on %s", signal, result["old_weight"], new_weight, result["branch"])
+    result["next"] = "A human reviews the pull request. Nothing changes until it is merged and the refresh runs."
+    return result
+
+
 if __name__ == "__main__":
-    log.info("starting; Cube at %s", CUBE_API)
+    log.info("starting; Cube at %s; outcomes file %s", CUBE_API, OUTCOMES_FILE)
     server.run()

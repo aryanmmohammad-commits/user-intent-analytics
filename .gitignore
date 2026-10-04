@@ -11,3 +11,8 @@ cube/data/
 
 .venv-mcp/
 runs/
+outcomes/
+briefs/
+.claude/settings.local.json
+__pycache__/
+cube/.cubestore/

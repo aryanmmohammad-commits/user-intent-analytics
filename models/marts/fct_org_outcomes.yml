@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: fct_org_outcomes
+    description: >
+      What happened after each Monday list. One row per scored organization per run date
+      (same grain as fct_org_intent_score), with its latest real outcome, or not_called.
+      Test outcomes are excluded. Hit rates divide by the whole list, not only by the
+      accounts somebody logged.
+    columns:
+      - name: org_run_key
+        description: Grain key, one organization on one run date.
+        data_tests:
+          - unique
+          - not_null
+      - name: organization_id
+        description: Organization identifier.
+        data_tests:
+          - not_null
+      - name: run_date
+        description: The run date of the list.
+        data_tests:
+          - not_null
+      - name: outcome
+        description: Latest real outcome, or not_called.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['meeting_booked', 'not_now', 'wrong_person', 'already_talking', 'no_reply', 'not_called']
+      - name: was_called
+        description: True when any real outcome was logged.
+        data_tests:
+          - not_null
+      - name: was_reached
+        description: Called and the outcome is not no_reply.
+        data_tests:
+          - not_null
+      - name: meeting_booked
+        description: True when the latest outcome is meeting_booked.
+        data_tests:
+          - not_null
