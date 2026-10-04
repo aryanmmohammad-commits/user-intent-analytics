@@ -1,0 +1,2 @@
+# The Revenue Signals MCP server, Monday brief and smoke test (.venv-mcp)
+mcp==2.3.0

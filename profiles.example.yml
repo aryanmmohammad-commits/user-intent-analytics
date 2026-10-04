@@ -1,0 +1,8 @@
+# Copy to %USERPROFILE%\.dbt\profiles.yml (or merge). dev.duckdb is created in the project folder.
+goalearn_intent:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: dev.duckdb
+      threads: 4

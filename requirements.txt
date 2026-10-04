@@ -1,0 +1,2 @@
+# Python packages for loading, export and the contract checks (run with python 3.12)
+duckdb==1.5.3

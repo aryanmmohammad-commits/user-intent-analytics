@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: act_salesforce_accounts
+    description: >
+      Sync-ready table for Salesforce Account fields (docs/activation_salesforce.md).
+      One row per scored organization on the latest run date. Match key: organization_id.
+    columns:
+      - name: organization_id
+        description: Match key, synced to the Account external id Product_Org_Id__c.
+        data_tests:
+          - unique
+          - not_null
+      - name: pqa_status
+        description: The box as Sales reads it.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['PQA', 'Heavy user', 'Tyre kicker', 'Not now']
+      - name: is_pqa
+        description: True for the accounts on the Monday brief.
+        data_tests:
+          - not_null
+      - name: run_date
+        description: The run date of the score.
+        data_tests:
+          - not_null
+
+  - name: act_amplitude_users
+    description: >
+      Sync-ready table for Amplitude user properties (docs/activation_amplitude.md).
+      One row per user of a scored organization on the latest run date.
+    columns:
+      - name: user_id
+        description: Match key, the Amplitude user_id.
+        data_tests:
+          - unique
+          - not_null
+      - name: revenue_box
+        description: The organization's box, the property each cohort is built on.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['pqa', 'heavy_user', 'tyre_kicker', 'not_now']
+      - name: is_pqa_contact
+        description: True for the one user Sales asks for in each PQA organization.
+        data_tests:
+          - not_null

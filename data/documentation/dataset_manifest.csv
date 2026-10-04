@@ -1,0 +1,11 @@
+path,rows,columns
+source/users.csv,500,6
+source/organizations.csv,100,6
+source/product_events.csv,12035,10
+raw_circleci/projects.csv,200,7
+raw_circleci/pipelines.csv,3012,8
+raw_circleci/workflows.csv,7000,8
+raw_circleci/jobs.csv,20000,9
+raw_circleci/circleci_pipelines_sample.json,100,nested JSON
+raw_circleci/circleci_workflows_sample.json,150,nested JSON
+documentation/data_dictionary.xlsx,54,6

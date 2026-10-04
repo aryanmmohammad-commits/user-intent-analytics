@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "revenue-signals": {
+      "type": "stdio",
+      "command": "C:\\path\\to\\this\\repo\\.venv-mcp\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\this\\repo\\mcp_server\\revenue_signals.py"],
+      "env": {
+        "CUBE_API_URL": "http://localhost:4000/cubejs-api/v1"
+      }
+    }
+  }
+}

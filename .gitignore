@@ -16,3 +16,4 @@ briefs/
 .claude/settings.local.json
 __pycache__/
 cube/.cubestore/
+.mcp.json

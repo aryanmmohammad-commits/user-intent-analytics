@@ -1,0 +1,19 @@
+# Cube Core for this project: reads the Parquet files in cube/data, serves the model in cube/model.
+# The image is pinned to the exact build this repo was tested with.
+# Start: docker compose up -d     Playground: http://localhost:4000
+services:
+  cube:
+    image: cubejs/cube@sha256:1627fb576878b3cba61bce01739a752190583da9cd6de180131462ca275e3924
+    container_name: goalearn-cube
+    ports:
+      - "4000:4000"
+      - "15432:15432"
+    environment:
+      CUBEJS_DEV_MODE: "true"
+      CUBEJS_DB_TYPE: duckdb
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?copy .env.example to .env and set it}
+      CUBEJS_PG_SQL_PORT: "15432"
+      CUBEJS_SQL_USER: cube
+      CUBEJS_SQL_PASSWORD: ${CUBEJS_SQL_PASSWORD:-cube}
+    volumes:
+      - ./cube:/cube/conf

@@ -1,7 +1,7 @@
 from pathlib import Path
 import duckdb
 
-DATA = Path("..")  # the folder that holds source/ and raw_circleci/
+DATA = Path("data")  # the folder that holds source/ and raw_circleci/
 TABLES = {  # schema name -> (folder, files)
     "source": ("source", ["users", "organizations", "product_events"]),
     "circleci_raw": ("raw_circleci", ["projects", "pipelines", "workflows", "jobs"]),
