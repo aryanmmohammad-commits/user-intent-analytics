@@ -32,7 +32,7 @@ import re
 import sys
 from pathlib import Path
 
-GRADER_VERSION = "checks v0 (code only)"
+GRADER_VERSION = "checks v0.1 (code only)"
 EVIDENCE_TARGET = 95.0
 SCORE_TOOL_PREFIX = "mcp__revenue-signals__"
 
@@ -321,7 +321,7 @@ def check(run: dict) -> list[dict]:
         add("States the run date", "no score data used", "only when scores are used", None)
 
     if any(s["name"].startswith(SCORE_TOOL_PREFIX) for s in steps):
-        labelled = "unvalidated" in answer.lower()
+        labelled = bool(re.search(r"\bv0\b", answer, re.I) and re.search(r"unvalidated|(?:not|n['\u2019]t)\s+(?:yet\s+)?(?:been\s+)?validated", answer, re.I))
         add("Labels the score v0, unvalidated", "labelled" if labelled else "missing", "labelled", labelled)
 
     ev = run["evidence"]

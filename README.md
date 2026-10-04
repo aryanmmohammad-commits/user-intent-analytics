@@ -20,6 +20,16 @@ It is not CircleCI customer data, and the product has no brand name in it.
 | Product | Which orgs need a nudge, not a call? | Boxes synced to Amplitude cohorts (design) |
 | Analytics engineer | Are the weights still right? | Monthly review; weight changes only as a pull request, only with enough evidence |
 
+## What it looks like
+
+The Monday brief a sales rep opens each week: PQAs, contact, reasons, a checked opener, five outcome buttons.
+
+![Monday brief](docs/img/monday_brief.png)
+
+Every run is graded by code. The red rows are real failures the grader caught: openers that mentioned tracked behavior, answers that called the product by the wrong name, and runs that never finished while the semantic layer restarted. After the fixes, the same question in a fresh conversation passes, and so do the Monday briefs. One grader rule was too strict and was corrected (checks v0.1); every run was re-scored with it.
+
+![Run scorecard](docs/img/run_scorecard.png)
+
 ## Architecture
 
 ```mermaid
@@ -135,8 +145,7 @@ docs/                  reports, designs and the generated revenue opportunity an
 ## How it was built
 
 In pair-programming sessions with Claude (Anthropic): Claude drafted code and documents, Aryan made the
-decisions and ran every block on his machine, and every reported number comes from those runs. Commits
-carry a Co-Authored-By trailer.
+decisions and ran every block on his machine, and every reported number comes from those runs.
 
 ## License
 

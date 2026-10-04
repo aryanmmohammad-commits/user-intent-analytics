@@ -147,7 +147,7 @@ def template_text(accounts: list[dict], run_date: str) -> dict:
     return {
         "summary": f"{len(accounts)} accounts to call from the {run_date} list, best first.",
         "accounts": [{"organization_id": a["organization_id"],
-                      "why": " ".join(a["reasons"]) or "In the top third on both usage and buying.",
+                      "why": "\n".join(a["reasons"]) or "In the top third on both usage and buying.",
                       "opener": TRIAL_OPENER if a["started_trial"] else next(goal)} for a in accounts],
     }
 
@@ -287,7 +287,7 @@ STYLE = scorecard.STYLE + """
 .acct{display:grid;grid-template-columns:44px 1fr;gap:4px 16px}
 .pos{font-family:Bahnschrift,"Segoe UI",sans-serif;font-size:26px;font-weight:600;color:var(--route);line-height:1}
 .acct h2{margin:0 0 2px}
-.because{color:var(--ink);margin:8px 0}
+.because{color:var(--ink);margin:8px 0;white-space:pre-line}
 .opener{border-left:3px solid var(--route);padding:6px 12px;margin:10px 0;font-style:italic}
 .tag{font-size:12px;color:var(--mute);font-style:normal}
 .sig{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:0 8px;margin:0 4px 4px 0;color:var(--mute)}
